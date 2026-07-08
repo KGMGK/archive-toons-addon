@@ -7,8 +7,8 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "axios": "^1.7.2"
+    "axios": "^1.7.2",
+    "stremio-addon-sdk": "^1.6.10"
   },
   "engines": {
     "node": ">=18"
