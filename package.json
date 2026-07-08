@@ -1,10 +1,11 @@
 {
   "name": "archive-toons-addon",
-  "version": "1.1.0",
-  "description": "Stremio addon for Arabic dubbed cartoons from archive.org",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Private Stremio addon for Arabic cartoons from Archive.org",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js",
+    "crawl": "node crawler.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
