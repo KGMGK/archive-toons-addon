@@ -3,22 +3,33 @@ const axios = require("axios");
 
 const PORT = process.env.PORT || 7000;
 
+const ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php";
 const ARCHIVE_META = "https://archive.org/metadata";
 const ARCHIVE_DL = "https://archive.org/download";
 
-const SERIES = {
+const SHOWS = {
   conan: {
-    name: "المحقق كونان (مدبلج)",
-    poster: "https://archive.org/services/img/anime-detective-conan-season10-arabic-dub",
-    identifiers: ["anime-detective-conan-season10-arabic-dub"]
+    name: "المحقق كونان مدبلج",
+    searchQuery: 'title:"detective conan" AND (arabic OR مدبلج)',
+    poster: "https://archive.org/services/img/anime-detective-conan-season10-arabic-dub"
+  },
+  tomjerry: {
+    name: "توم وجيري مدبلج",
+    searchQuery: 'title:"tom and jerry" AND (arabic OR مدبلج)',
+    poster: "https://archive.org/services/img/tom-and-jerry-arabic"
+  },
+  pinkpanther: {
+    name: "النمر الوردي مدبلج",
+    searchQuery: 'title:"pink panther" AND (arabic OR مدبلج)',
+    poster: "https://archive.org/services/img/pink-panther-arabic"
   }
 };
 
 const manifest = {
   id: "com.khalifa.archivetoons",
-  version: "1.0.0",
+  version: "1.1.0",
   name: "Archive Toons - أرشيف خليفة",
-  description: "إضافة خاصة تعرض كرتون وأنمي مدبلج من archive.org",
+  description: "كرتون وأنمي مدبلج عربي من Archive.org",
   logo: "https://archive.org/images/glogo.png",
   resources: ["catalog", "meta", "stream"],
   types: ["series"],
@@ -38,55 +49,88 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-const episodeCache = {};
+const cache = {
+  identifiers: {},
+  episodes: {}
+};
 
-async function fetchFilesForIdentifier(identifier) {
-  const url = `${ARCHIVE_META}/${identifier}`;
-  const response = await axios.get(url, { timeout: 20000 });
-  const data = response.data;
+async function searchArchiveIdentifiers(showKey) {
+  if (cache.identifiers[showKey]) return cache.identifiers[showKey];
 
-  if (!data || !Array.isArray(data.files)) return [];
+  const show = SHOWS[showKey];
+  if (!show) return [];
 
-  const videoFiles = data.files.filter((file) => {
-    const name = (file.name || "").toLowerCase();
-    return (
-      name.endsWith(".mp4") ||
-      name.endsWith(".mkv") ||
-      name.endsWith(".avi")
-    );
-  });
+  try {
+    const res = await axios.get(ARCHIVE_SEARCH, {
+      timeout: 20000,
+      params: {
+        q: show.searchQuery,
+        fl: ["identifier", "title"],
+        rows: 50,
+        page: 1,
+        output: "json"
+      }
+    });
 
-  videoFiles.sort((a, b) =>
-    a.name.localeCompare(b.name, "ar", { numeric: true })
-  );
+    const docs = res.data?.response?.docs || [];
 
-  return videoFiles.map((file) => ({
-    identifier,
-    fileName: file.name,
-    title:
-      file.title ||
-      file.name.replace(/\.(mp4|mkv|avi)$/i, "")
-  }));
+    const identifiers = docs
+      .map((item) => item.identifier)
+      .filter(Boolean);
+
+    cache.identifiers[showKey] = identifiers;
+    return identifiers;
+  } catch (err) {
+    console.error("Archive search error:", err.message);
+    return [];
+  }
 }
 
-async function getEpisodesForSeries(seriesKey) {
-  if (episodeCache[seriesKey]) return episodeCache[seriesKey];
+async function fetchVideosFromIdentifier(identifier) {
+  try {
+    const res = await axios.get(`${ARCHIVE_META}/${identifier}`, {
+      timeout: 20000
+    });
 
-  const series = SERIES[seriesKey];
-  if (!series) return [];
+    const files = res.data?.files || [];
+
+    return files
+      .filter((file) => {
+        const name = (file.name || "").toLowerCase();
+        return (
+          name.endsWith(".mp4") ||
+          name.endsWith(".mkv") ||
+          name.endsWith(".avi")
+        );
+      })
+      .map((file) => ({
+        identifier,
+        fileName: file.name,
+        title: file.title || file.name.replace(/\.(mp4|mkv|avi)$/i, "")
+      }));
+  } catch (err) {
+    console.error(`Metadata error for ${identifier}:`, err.message);
+    return [];
+  }
+}
+
+async function getEpisodes(showKey) {
+  if (cache.episodes[showKey]) return cache.episodes[showKey];
+
+  const identifiers = await searchArchiveIdentifiers(showKey);
 
   let episodes = [];
 
-  for (const identifier of series.identifiers) {
-    try {
-      const files = await fetchFilesForIdentifier(identifier);
-      episodes = episodes.concat(files);
-    } catch (error) {
-      console.error(`Archive.org error for ${identifier}:`, error.message);
-    }
+  for (const identifier of identifiers) {
+    const videos = await fetchVideosFromIdentifier(identifier);
+    episodes = episodes.concat(videos);
   }
 
-  episodeCache[seriesKey] = episodes;
+  episodes.sort((a, b) =>
+    a.title.localeCompare(b.title, "ar", { numeric: true })
+  );
+
+  cache.episodes[showKey] = episodes;
   return episodes;
 }
 
@@ -95,17 +139,13 @@ builder.defineCatalogHandler(async ({ type, id }) => {
     return { metas: [] };
   }
 
-  const metas = Object.keys(SERIES).map((key) => {
-    const series = SERIES[key];
-
-    return {
-      id: `arch:${key}`,
-      type: "series",
-      name: series.name,
-      poster: series.poster,
-      posterShape: "poster"
-    };
-  });
+  const metas = Object.keys(SHOWS).map((key) => ({
+    id: `arch:${key}`,
+    type: "series",
+    name: SHOWS[key].name,
+    poster: SHOWS[key].poster,
+    posterShape: "poster"
+  }));
 
   return { metas };
 });
@@ -113,29 +153,30 @@ builder.defineCatalogHandler(async ({ type, id }) => {
 builder.defineMetaHandler(async ({ type, id }) => {
   if (type !== "series") return { meta: null };
 
-  const key = id.replace("arch:", "");
-  const series = SERIES[key];
+  const showKey = id.replace("arch:", "");
+  const show = SHOWS[showKey];
 
-  if (!series) return { meta: null };
+  if (!show) return { meta: null };
 
-  const episodes = await getEpisodesForSeries(key);
+  const episodes = await getEpisodes(showKey);
 
-  const videos = episodes.map((episode, index) => ({
-    id: `arch:${key}:${index}`,
-    title: episode.title,
+  const videos = episodes.map((ep, index) => ({
+    id: `arch:${showKey}:${index}`,
+    title: ep.title || `Episode ${index + 1}`,
     season: 1,
     episode: index + 1,
+    thumbnail: show.poster,
     released: new Date().toISOString()
   }));
 
   return {
     meta: {
-      id: `arch:${key}`,
+      id: `arch:${showKey}`,
       type: "series",
-      name: series.name,
-      poster: series.poster,
-      background: series.poster,
-      description: "كرتون وأنمي مدبلج من archive.org",
+      name: show.name,
+      poster: show.poster,
+      background: show.poster,
+      description: `عدد الحلقات المتوفرة: ${videos.length}`,
       videos
     }
   };
@@ -145,28 +186,26 @@ builder.defineStreamHandler(async ({ type, id }) => {
   if (type !== "series") return { streams: [] };
 
   const parts = id.split(":");
-  const key = parts[1];
-  const episodeIndex = Number(parts[2]);
+  const showKey = parts[1];
+  const epIndex = Number(parts[2]);
 
-  if (!key || Number.isNaN(episodeIndex)) {
+  if (!showKey || Number.isNaN(epIndex)) {
     return { streams: [] };
   }
 
-  const episodes = await getEpisodesForSeries(key);
-  const episode = episodes[episodeIndex];
+  const episodes = await getEpisodes(showKey);
+  const ep = episodes[epIndex];
 
-  if (!episode) {
-    return { streams: [] };
-  }
+  if (!ep) return { streams: [] };
 
-  const directUrl = `${ARCHIVE_DL}/${episode.identifier}/${episode.fileName}`;
+  const url = `${ARCHIVE_DL}/${ep.identifier}/${ep.fileName}`;
 
   return {
     streams: [
       {
         name: "Archive.org",
-        title: episode.title,
-        url: directUrl
+        title: ep.title,
+        url
       }
     ]
   };
