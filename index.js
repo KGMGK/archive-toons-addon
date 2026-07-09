@@ -17,7 +17,7 @@ const ARCHIVE_DL = 'https://archive.org/download';
 const ARCHIVE_IMG = 'https://archive.org/services/img';
 
 // ------------------------------------------------------------------
-// المكتبة: كل صف (catalog) فيه مجموعات
+// المكتبة
 // ------------------------------------------------------------------
 const LIBRARY = [
   {
@@ -48,6 +48,7 @@ const LIBRARY = [
     catalogId: 'arch-mrbean',
     catalogName: 'مستر بين',
     items: [
+      { id: 'series-of-mr-bean', name: 'مستر بين - المسلسل الأصلي' },
       { id: 'mr-bean-animated-series', name: 'مستر بين - الكرتون' }
     ]
   },
@@ -69,7 +70,6 @@ LIBRARY.forEach((cat) => {
 
 const episodeCache = {};
 
-// يحول الحجم لصيغة مقروءة
 function humanSize(bytes) {
   const n = parseInt(bytes, 10);
   if (!n || isNaN(n)) return '';
@@ -77,60 +77,85 @@ function humanSize(bytes) {
   return Math.round(n / (1024 * 1024)) + ' MB';
 }
 
+function isVideoName(name) {
+  const n = (name || '').toLowerCase();
+  return n.endsWith('.mp4') || n.endsWith('.mkv') || n.endsWith('.avi');
+}
+
+// اسم معروض نظيف للحلقة
+function cleanTitle(name) {
+  return name
+    .replace(/\.ia\.mp4$/i, '')
+    .replace(/\.(mp4|mkv|avi)$/i, '')
+    .replace(/_/g, ' ')
+    .trim();
+}
+
 // ------------------------------------------------------------------
-// جلب الحلقات: نجمع النسخة الأصلية + النسخة الخفيفة لكل حلقة
+// جلب الحلقات
+// نعتمد على حقول الأرشيف نفسها: source (original/derivative) و original
 // ------------------------------------------------------------------
 async function fetchEpisodes(identifier) {
   if (episodeCache[identifier]) return episodeCache[identifier];
 
   try {
     const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 25000 });
-    const files = (res.data && res.data.files) || [];
+    const data = res.data || {};
+    const files = data.files || [];
 
-    const groups = {};
+    // السيرفر المباشر (نتجنب التحويلة)
+    const directBase =
+      data.server && data.dir ? `https://${data.server}${data.dir}` : null;
+
+    const originals = [];
+    const derivatives = [];
 
     files.forEach((f) => {
       const name = f.name || '';
       const lower = name.toLowerCase();
-
-      const isVideo =
-        lower.endsWith('.mp4') || lower.endsWith('.mkv') || lower.endsWith('.avi');
-      if (!isVideo) return;
-
-      // نتجاهل التعليقات الصوتية والمصغرات
+      if (!isVideoName(name)) return;
       if (lower.includes('_thumb') || lower.includes('commentary')) return;
 
-      // النسخة الخفيفة من الأرشيف تنتهي بـ .ia.mp4
-      const isLight = lower.endsWith('.ia.mp4');
-
-      // اسم أساسي موحّد للحلقة (بدون الامتداد ولا .ia)
-      const base = name
-        .replace(/\.ia\.mp4$/i, '')
-        .replace(/\.(mp4|mkv|avi)$/i, '');
-
-      if (!groups[base]) {
-        groups[base] = { base, original: null, light: null };
-      }
-
-      if (isLight) {
-        groups[base].light = { fileName: name, size: f.size };
+      if (f.source === 'derivative') {
+        derivatives.push(f);
       } else {
-        groups[base].original = { fileName: name, size: f.size };
+        originals.push(f);
       }
     });
 
-    const episodes = Object.values(groups)
-      .filter((g) => g.original || g.light)
-      .sort((a, b) => a.base.localeCompare(b.base, 'en', { numeric: true }))
-      .map((g) => ({
+    // لو ما فيه ملفات أصلية (زي مستر بين الأصلي) نستخدم المشتقة كأساس
+    const base = originals.length > 0 ? originals : derivatives;
+    const useDerivAsLight = originals.length > 0;
+
+    base.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
+
+    const episodes = base.map((f) => {
+      let light = null;
+
+      if (useDerivAsLight) {
+        // نلقى المشتقة الأصغر المرتبطة بهالملف
+        const linked = derivatives.filter((d) => d.original === f.name);
+        if (linked.length > 0) {
+          linked.sort((a, b) => parseInt(a.size || 0, 10) - parseInt(b.size || 0, 10));
+          const smallest = linked[0];
+          // نعرضها بس لو فعلاً أصغر بشكل ملموس
+          if (parseInt(smallest.size || 0, 10) < parseInt(f.size || 0, 10) * 0.8) {
+            light = { fileName: smallest.name, size: smallest.size };
+          }
+        }
+      }
+
+      return {
         identifier,
-        title: g.base.replace(/_/g, ' ').trim(),
-        original: g.original,
-        light: g.light
-      }));
+        directBase,
+        title: cleanTitle(f.name),
+        main: { fileName: f.name, size: f.size },
+        light
+      };
+    });
 
     episodeCache[identifier] = episodes;
-    console.log(`تم جلب ${episodes.length} حلقة من ${identifier}`);
+    console.log(`${identifier}: ${episodes.length} حلقة`);
     return episodes;
   } catch (err) {
     console.error(`خطأ بجلب ${identifier}: ${err.message}`);
@@ -138,23 +163,19 @@ async function fetchEpisodes(identifier) {
   }
 }
 
-// ------------------------------------------------------------------
-// تسخين الكاش: نجهز كل المجموعات بالخلفية عند التشغيل
-// ------------------------------------------------------------------
 async function warmCache() {
   const all = [];
   LIBRARY.forEach((c) => c.items.forEach((i) => all.push(i.id)));
-
   for (const id of all) {
     await fetchEpisodes(id);
-    await new Promise((r) => setTimeout(r, 400)); // نتنفس بين الطلبات
+    await new Promise((r) => setTimeout(r, 400));
   }
   console.log('اكتمل تسخين الكاش ✅');
 }
 
 const manifest = {
   id: 'com.khalifa.archivetoons',
-  version: '4.0.0',
+  version: '5.0.0',
   name: 'Archive Toons - أرشيف خليفة',
   description: 'كرتون كلاسيك وأنمي مدبلج من archive.org',
   logo: 'https://archive.org/images/glogo.png',
@@ -173,7 +194,6 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// نقطة بسيطة عشان خدمات "إبقاء السيرفر صاحي" تناديها
 app.get('/ping', (req, res) => res.send('ok'));
 
 app.get('/catalog/series/:catalogId.json', (req, res) => {
@@ -227,9 +247,6 @@ app.get('/meta/series/:id.json', async (req, res) => {
   });
 });
 
-// ------------------------------------------------------------------
-// Stream: نعرض خيارين — خفيف (أسرع) وأصلي (أوضح)
-// ------------------------------------------------------------------
 app.get('/stream/series/:id.json', async (req, res) => {
   const raw = req.params.id.replace('arch:', '');
   const cut = raw.lastIndexOf(':');
@@ -243,30 +260,35 @@ app.get('/stream/series/:id.json', async (req, res) => {
   const ep = episodes[index];
   if (!ep) return res.json({ streams: [] });
 
+  // نستخدم السيرفر المباشر لو متوفر، وإلا رابط التحميل العادي
+  const buildUrl = (fileName) => {
+    const encoded = encodeURIComponent(fileName);
+    return ep.directBase
+      ? `${ep.directBase}/${encoded}`
+      : `${ARCHIVE_DL}/${identifier}/${encoded}`;
+  };
+
   const streams = [];
 
-  // الخفيف أولاً عشان يكون الاختيار الافتراضي
   if (ep.light) {
     streams.push({
       name: '⚡ خفيف',
-      title: `${ep.title}\nتشغيل أسرع • ${humanSize(ep.light.size)}`,
-      url: `${ARCHIVE_DL}/${identifier}/${encodeURIComponent(ep.light.fileName)}`
+      title: `${ep.title}\nأسرع • ${humanSize(ep.light.size)}`,
+      url: buildUrl(ep.light.fileName)
     });
   }
 
-  if (ep.original) {
-    streams.push({
-      name: '🎬 أصلي',
-      title: `${ep.title}\nجودة أعلى • ${humanSize(ep.original.size)}`,
-      url: `${ARCHIVE_DL}/${identifier}/${encodeURIComponent(ep.original.fileName)}`
-    });
-  }
+  streams.push({
+    name: ep.light ? '🎬 أصلي' : '▶️ تشغيل',
+    title: `${ep.title}\n${humanSize(ep.main.size)}`,
+    url: buildUrl(ep.main.fileName)
+  });
 
   res.setHeader('Content-Type', 'application/json');
   res.json({ streams });
 });
 
 app.listen(PORT, () => {
-  console.log(`Archive Toons v4 running on port ${PORT}`);
+  console.log(`Archive Toons v5 running on port ${PORT}`);
   warmCache();
 });
