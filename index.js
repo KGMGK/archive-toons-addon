@@ -18,8 +18,14 @@ const ARCHIVE_IMG = 'https://archive.org/services/img';
 
 // ------------------------------------------------------------------
 // المكتبة
+// poster اختياري: لو ما حطيته، ياخذ صورة الأرشيف التلقائية
 // ------------------------------------------------------------------
 const LIBRARY = [
+  {
+    catalogId: 'arch-conan',
+    catalogName: 'المحقق كونان (مدبلج)',
+    items: [] // تتعبى تلقائيًا بالاكتشاف
+  },
   {
     catalogId: 'arch-tomjerry',
     catalogName: 'توم وجيري - كلاسيك',
@@ -51,22 +57,25 @@ const LIBRARY = [
       { id: 'series-of-mr-bean', name: 'مستر بين - المسلسل الأصلي' },
       { id: 'mr-bean-animated-series', name: 'مستر بين - الكرتون' }
     ]
-  },
-  {
-    catalogId: 'arch-conan',
-    catalogName: 'المحقق كونان (مدبلج)',
-    items: [
-      { id: 'anime-detective-conan-season10-arabic-dub', name: 'المحقق كونان - الجزء 10' }
-    ]
   }
 ];
 
 const NAME_BY_ID = {};
-LIBRARY.forEach((cat) => {
-  cat.items.forEach((it) => {
-    NAME_BY_ID[it.id] = it.name;
+const POSTER_BY_ID = {};
+
+function reindex() {
+  LIBRARY.forEach((cat) => {
+    cat.items.forEach((it) => {
+      NAME_BY_ID[it.id] = it.name;
+      if (it.poster) POSTER_BY_ID[it.id] = it.poster;
+    });
   });
-});
+}
+reindex();
+
+function posterFor(identifier) {
+  return POSTER_BY_ID[identifier] || `${ARCHIVE_IMG}/${identifier}`;
+}
 
 const episodeCache = {};
 
@@ -77,74 +86,87 @@ function humanSize(bytes) {
   return Math.round(n / (1024 * 1024)) + ' MB';
 }
 
-function isVideoName(name) {
-  const n = (name || '').toLowerCase();
-  return n.endsWith('.mp4') || n.endsWith('.mkv') || n.endsWith('.avi');
+// كشف الفيديو: بالامتداد أو بصيغة الأرشيف
+function isVideoFile(f) {
+  const name = (f.name || '').toLowerCase();
+  const fmt = (f.format || '').toLowerCase();
+
+  const byExt =
+    name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi') ||
+    name.endsWith('.m4v') || name.endsWith('.webm') || name.endsWith('.mov');
+
+  const byFormat =
+    fmt.includes('mpeg4') || fmt.includes('h.264') || fmt.includes('matroska') ||
+    fmt.includes('webm') || fmt.includes('quicktime');
+
+  return byExt || byFormat;
 }
 
-// اسم معروض نظيف للحلقة
 function cleanTitle(name) {
   return name
     .replace(/\.ia\.mp4$/i, '')
-    .replace(/\.(mp4|mkv|avi)$/i, '')
+    .replace(/\.(mp4|mkv|avi|m4v|webm|mov)$/i, '')
     .replace(/_/g, ' ')
     .trim();
 }
 
-// ------------------------------------------------------------------
-// جلب الحلقات
-// نعتمد على حقول الأرشيف نفسها: source (original/derivative) و original
-// ------------------------------------------------------------------
+// جلب مع إعادة محاولة
+async function fetchMeta(identifier, tries = 2) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 40000 });
+      return res.data || {};
+    } catch (err) {
+      if (i === tries - 1) throw err;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  return {};
+}
+
 async function fetchEpisodes(identifier) {
   if (episodeCache[identifier]) return episodeCache[identifier];
 
   try {
-    const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 25000 });
-    const data = res.data || {};
+    const data = await fetchMeta(identifier);
     const files = data.files || [];
 
-    // السيرفر المباشر (نتجنب التحويلة)
     const directBase =
       data.server && data.dir ? `https://${data.server}${data.dir}` : null;
 
-    const originals = [];
-    const derivatives = [];
-
-    files.forEach((f) => {
-      const name = f.name || '';
-      const lower = name.toLowerCase();
-      if (!isVideoName(name)) return;
-      if (lower.includes('_thumb') || lower.includes('commentary')) return;
-
-      if (f.source === 'derivative') {
-        derivatives.push(f);
-      } else {
-        originals.push(f);
-      }
+    const vids = files.filter((f) => {
+      if (!isVideoFile(f)) return false;
+      const n = (f.name || '').toLowerCase();
+      if (n.includes('_thumb') || n.includes('commentary')) return false;
+      return true;
     });
 
-    // لو ما فيه ملفات أصلية (زي مستر بين الأصلي) نستخدم المشتقة كأساس
+    if (vids.length === 0) {
+      console.log(`${identifier}: 0 حلقة (ما فيه ملفات فيديو)`);
+      episodeCache[identifier] = [];
+      return [];
+    }
+
+    const originals = vids.filter((f) => f.source !== 'derivative');
+    const derivatives = vids.filter((f) => f.source === 'derivative');
+
     const base = originals.length > 0 ? originals : derivatives;
-    const useDerivAsLight = originals.length > 0;
+    const canPairLight = originals.length > 0 && derivatives.length > 0;
 
     base.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
 
     const episodes = base.map((f) => {
       let light = null;
-
-      if (useDerivAsLight) {
-        // نلقى المشتقة الأصغر المرتبطة بهالملف
+      if (canPairLight) {
         const linked = derivatives.filter((d) => d.original === f.name);
         if (linked.length > 0) {
           linked.sort((a, b) => parseInt(a.size || 0, 10) - parseInt(b.size || 0, 10));
-          const smallest = linked[0];
-          // نعرضها بس لو فعلاً أصغر بشكل ملموس
-          if (parseInt(smallest.size || 0, 10) < parseInt(f.size || 0, 10) * 0.8) {
-            light = { fileName: smallest.name, size: smallest.size };
+          const s = linked[0];
+          if (parseInt(s.size || 0, 10) < parseInt(f.size || 0, 10) * 0.8) {
+            light = { fileName: s.name, size: s.size };
           }
         }
       }
-
       return {
         identifier,
         directBase,
@@ -163,7 +185,36 @@ async function fetchEpisodes(identifier) {
   }
 }
 
+// ------------------------------------------------------------------
+// اكتشاف أجزاء كونان تلقائيًا
+// ------------------------------------------------------------------
+async function discoverConan() {
+  const cat = LIBRARY.find((c) => c.catalogId === 'arch-conan');
+  const found = [];
+
+  for (let s = 1; s <= 30; s++) {
+    const id = `anime-detective-conan-season${s}-arabic-dub`;
+    try {
+      const data = await fetchMeta(id, 1);
+      const hasFiles = (data.files || []).some(isVideoFile);
+      if (hasFiles) {
+        found.push({ id, name: `المحقق كونان - الجزء ${s}` });
+        console.log(`✅ لقينا كونان الجزء ${s}`);
+      }
+    } catch (e) {
+      // الجزء مو موجود، نكمل
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  cat.items = found;
+  reindex();
+  console.log(`اكتمل اكتشاف كونان: ${found.length} جزء`);
+}
+
 async function warmCache() {
+  await discoverConan();
+
   const all = [];
   LIBRARY.forEach((c) => c.items.forEach((i) => all.push(i.id)));
   for (const id of all) {
@@ -175,7 +226,7 @@ async function warmCache() {
 
 const manifest = {
   id: 'com.khalifa.archivetoons',
-  version: '5.0.0',
+  version: '6.0.0',
   name: 'Archive Toons - أرشيف خليفة',
   description: 'كرتون كلاسيك وأنمي مدبلج من archive.org',
   logo: 'https://archive.org/images/glogo.png',
@@ -204,7 +255,7 @@ app.get('/catalog/series/:catalogId.json', (req, res) => {
     id: `arch:${it.id}`,
     type: 'series',
     name: it.name,
-    poster: `${ARCHIVE_IMG}/${it.id}`,
+    poster: posterFor(it.id),
     posterShape: 'poster'
   }));
 
@@ -220,7 +271,7 @@ app.get('/meta/series/:id.json', async (req, res) => {
     return res.status(404).json({ err: 'not found' });
   }
 
-  const poster = `${ARCHIVE_IMG}/${identifier}`;
+  const poster = posterFor(identifier);
   const seriesName = NAME_BY_ID[identifier] || identifier;
 
   const videos = episodes.map((ep, i) => ({
@@ -260,7 +311,6 @@ app.get('/stream/series/:id.json', async (req, res) => {
   const ep = episodes[index];
   if (!ep) return res.json({ streams: [] });
 
-  // نستخدم السيرفر المباشر لو متوفر، وإلا رابط التحميل العادي
   const buildUrl = (fileName) => {
     const encoded = encodeURIComponent(fileName);
     return ep.directBase
@@ -289,6 +339,6 @@ app.get('/stream/series/:id.json', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Archive Toons v5 running on port ${PORT}`);
+  console.log(`Archive Toons v6 running on port ${PORT}`);
   warmCache();
 });
