@@ -4,6 +4,7 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 7000;
 
+// السماح لأي موقع بالوصول (CORS)
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -14,79 +15,111 @@ app.use((req, res, next) => {
   next();
 });
 
+const ARCHIVE_SEARCH = 'https://archive.org/advancedsearch.php';
 const ARCHIVE_META = 'https://archive.org/metadata';
 const ARCHIVE_DL = 'https://archive.org/download';
+const ARCHIVE_IMG = 'https://archive.org/services/img';
 
-const SERIES = {
-  'conan': {
-    name: 'المحقق كونان (مدبلج)',
-    poster: 'https://archive.org/services/img/anime-detective-conan-season10-arabic-dub',
-    identifiers: [
-      'anime-detective-conan-season10-arabic-dub'
-    ]
+// ------------------------------------------------------------------
+// المفضلة: مجموعات مثبتة تظهر دايم بالكتالوج
+// ------------------------------------------------------------------
+const FAVORITES = {
+  'conan10': {
+    name: 'المحقق كونان - الجزء العاشر (مدبلج)',
+    identifier: 'anime-detective-conan-season10-arabic-dub'
   }
 };
 
+// كاش لتخزين الحلقات
 const episodeCache = {};
 
-async function fetchFilesForIdentifier(identifier) {
-  const url = `${ARCHIVE_META}/${identifier}`;
-  const res = await axios.get(url, { timeout: 20000 });
-  const data = res.data;
+// ------------------------------------------------------------------
+// يجلب ملفات الفيديو من مجموعة معينة
+// ------------------------------------------------------------------
+async function fetchEpisodes(identifier) {
+  if (episodeCache[identifier]) {
+    return episodeCache[identifier];
+  }
 
-  if (!data || !data.files) {
+  try {
+    const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 20000 });
+    const data = res.data;
+
+    if (!data || !data.files) return [];
+
+    const videoFiles = data.files.filter((f) => {
+      const name = (f.name || '').toLowerCase();
+      const isVideo = name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi');
+      // نتجاهل الملفات الوصفية والمصغرات
+      const isJunk = name.includes('_thumb') || name.endsWith('.ia.mp4');
+      return isVideo && !isJunk;
+    });
+
+    videoFiles.sort((a, b) => a.name.localeCompare(b.name, 'ar', { numeric: true }));
+
+    const episodes = videoFiles.map((f) => ({
+      identifier,
+      fileName: f.name,
+      title: f.name.replace(/\.(mp4|mkv|avi)$/i, '')
+    }));
+
+    episodeCache[identifier] = episodes;
+    return episodes;
+  } catch (err) {
+    console.error(`خطأ بجلب ${identifier}: ${err.message}`);
     return [];
   }
-
-  const videoFiles = data.files.filter((f) => {
-    const name = (f.name || '').toLowerCase();
-    return name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi');
-  });
-
-  videoFiles.sort((a, b) => a.name.localeCompare(b.name, 'ar', { numeric: true }));
-
-  return videoFiles.map((f) => ({
-    identifier,
-    fileName: f.name,
-    title: f.title || f.name.replace(/\.(mp4|mkv|avi)$/i, '')
-  }));
 }
 
-async function getEpisodesForSeries(seriesKey) {
-  if (episodeCache[seriesKey]) {
-    return episodeCache[seriesKey];
+// ------------------------------------------------------------------
+// يبحث بـ archive.org عن مجموعات فيديو
+// ------------------------------------------------------------------
+async function searchArchive(query) {
+  try {
+    const params = {
+      q: `(${query}) AND mediatype:(movies)`,
+      'fl[]': ['identifier', 'title', 'year'],
+      rows: 40,
+      page: 1,
+      output: 'json'
+    };
+
+    const res = await axios.get(ARCHIVE_SEARCH, { params, timeout: 20000 });
+    const docs = (res.data && res.data.response && res.data.response.docs) || [];
+
+    return docs.map((d) => ({
+      identifier: d.identifier,
+      title: d.title || d.identifier,
+      year: d.year
+    }));
+  } catch (err) {
+    console.error(`خطأ بالبحث: ${err.message}`);
+    return [];
   }
-
-  const series = SERIES[seriesKey];
-  if (!series) return [];
-
-  let allEpisodes = [];
-  for (const identifier of series.identifiers) {
-    try {
-      const files = await fetchFilesForIdentifier(identifier);
-      allEpisodes = allEpisodes.concat(files);
-    } catch (err) {
-      console.error(`خطأ بجلب ${identifier}: ${err.message}`);
-    }
-  }
-
-  episodeCache[seriesKey] = allEpisodes;
-  return allEpisodes;
 }
 
+// ------------------------------------------------------------------
+// Manifest
+// ------------------------------------------------------------------
 const manifest = {
   id: 'com.khalifa.archivetoons',
-  version: '1.0.0',
+  version: '2.0.0',
   name: 'Archive Toons - أرشيف خليفة',
-  description: 'إضافة خاصة تعرض كرتون وأنمي مدبلج من archive.org',
+  description: 'ابحث وشغّل الكرتون والأنمي المدبلج مباشرة من archive.org',
   logo: 'https://archive.org/images/glogo.png',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
   catalogs: [
     {
       type: 'series',
-      id: 'archive-toons-catalog',
-      name: 'أرشيف خليفة'
+      id: 'archive-favorites',
+      name: 'أرشيف خليفة - المفضلة'
+    },
+    {
+      type: 'series',
+      id: 'archive-search',
+      name: 'بحث بالأرشيف',
+      extra: [{ name: 'search', isRequired: true }]
     }
   ],
   idPrefixes: ['arch:']
@@ -97,62 +130,112 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-app.get('/catalog/series/archive-toons-catalog.json', (req, res) => {
-  const metas = Object.keys(SERIES).map((key) => {
-    const s = SERIES[key];
+// ------------------------------------------------------------------
+// Catalog: المفضلة (مجموعات ثابتة)
+// ------------------------------------------------------------------
+app.get('/catalog/series/archive-favorites.json', (req, res) => {
+  const metas = Object.keys(FAVORITES).map((key) => {
+    const f = FAVORITES[key];
     return {
-      id: `arch:${key}`,
+      id: `arch:${f.identifier}`,
       type: 'series',
-      name: s.name,
-      poster: s.poster
+      name: f.name,
+      poster: `${ARCHIVE_IMG}/${f.identifier}`,
+      posterShape: 'poster'
     };
   });
   res.setHeader('Content-Type', 'application/json');
   res.json({ metas });
 });
 
+// ------------------------------------------------------------------
+// Catalog: البحث الحي
+// ------------------------------------------------------------------
+app.get('/catalog/series/archive-search/search=:query.json', async (req, res) => {
+  const query = decodeURIComponent(req.params.query || '');
+
+  if (!query) {
+    return res.json({ metas: [] });
+  }
+
+  const results = await searchArchive(query);
+
+  const metas = results.map((r) => ({
+    id: `arch:${r.identifier}`,
+    type: 'series',
+    name: r.title,
+    poster: `${ARCHIVE_IMG}/${r.identifier}`,
+    posterShape: 'poster',
+    description: r.year ? `السنة: ${r.year}` : undefined
+  }));
+
+  res.setHeader('Content-Type', 'application/json');
+  res.json({ metas });
+});
+
+// ------------------------------------------------------------------
+// Meta: تفاصيل المجموعة + حلقاتها
+// ------------------------------------------------------------------
 app.get('/meta/series/:id.json', async (req, res) => {
   const id = req.params.id;
-  const key = id.replace('arch:', '');
-  const series = SERIES[key];
+  const identifier = id.replace('arch:', '');
 
-  if (!series) {
+  const episodes = await fetchEpisodes(identifier);
+
+  if (episodes.length === 0) {
     return res.status(404).json({ err: 'not found' });
   }
 
-  const episodes = await getEpisodesForSeries(key);
+  // نحاول نجيب اسم المجموعة الحقيقي
+  let seriesName = identifier;
+  const fav = Object.values(FAVORITES).find((f) => f.identifier === identifier);
+  if (fav) {
+    seriesName = fav.name;
+  }
+
+  const posterUrl = `${ARCHIVE_IMG}/${identifier}`;
 
   const videos = episodes.map((ep, index) => ({
-    id: `arch:${key}:${index}`,
+    id: `arch:${identifier}:${index}`,
     title: ep.title,
     season: 1,
-    episode: index + 1
+    episode: index + 1,
+    thumbnail: posterUrl
   }));
 
   res.setHeader('Content-Type', 'application/json');
   res.json({
     meta: {
-      id: `arch:${key}`,
+      id: `arch:${identifier}`,
       type: 'series',
-      name: series.name,
-      poster: series.poster,
+      name: seriesName,
+      poster: posterUrl,
+      background: posterUrl,
       videos
     }
   });
 });
 
+// ------------------------------------------------------------------
+// Stream: رابط التشغيل المباشر
+// ------------------------------------------------------------------
 app.get('/stream/series/:id.json', async (req, res) => {
-  const id = req.params.id;
-  const parts = id.split(':');
-  const key = parts[1];
-  const epIndex = parseInt(parts[2], 10);
+  const id = req.params.id; // arch:IDENTIFIER:INDEX
+  const withoutPrefix = id.replace('arch:', '');
+  const lastColon = withoutPrefix.lastIndexOf(':');
 
-  const series = SERIES[key];
-  if (!series || isNaN(epIndex)) {
-    return res.status(404).json({ streams: [] });
+  if (lastColon === -1) {
+    return res.json({ streams: [] });
   }
 
-  const episodes = await getEpisodesForSeries(key);
+  const identifier = withoutPrefix.substring(0, lastColon);
+  const epIndex = parseInt(withoutPrefix.substring(lastColon + 1), 10);
+
+  if (isNaN(epIndex)) {
+    return res.json({ streams: [] });
+  }
+
+  const episodes = await fetchEpisodes(identifier);
   const ep = episodes[epIndex];
 
   if (!ep) {
@@ -173,6 +256,7 @@ app.get('/stream/series/:id.json', async (req, res) => {
   });
 });
 
+// ------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log(`Archive Toons addon running on port ${PORT}`);
 });
