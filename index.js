@@ -4,63 +4,92 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-// السماح لأي موقع بالوصول (CORS)
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-const ARCHIVE_SEARCH = 'https://archive.org/advancedsearch.php';
 const ARCHIVE_META = 'https://archive.org/metadata';
 const ARCHIVE_DL = 'https://archive.org/download';
 const ARCHIVE_IMG = 'https://archive.org/services/img';
 
-// ------------------------------------------------------------------
-// المفضلة: مجموعات مثبتة تظهر دايم بالكتالوج
-// ------------------------------------------------------------------
-const FAVORITES = {
-  'conan10': {
-    name: 'المحقق كونان - الجزء العاشر (مدبلج)',
-    identifier: 'anime-detective-conan-season10-arabic-dub'
+const LIBRARY = [
+  {
+    catalogId: 'arch-tomjerry',
+    catalogName: 'توم وجيري - كلاسيك',
+    items: [
+      { id: 'tomandjerry-theclassiccollection-volume01', name: 'توم وجيري - الجزء 1' },
+      { id: 'tomandjerrytheclassiccollectionvolume03', name: 'توم وجيري - الجزء 3' },
+      { id: 'tomandjerrytheclassiccollectionvolume04', name: 'توم وجيري - الجزء 4' },
+      { id: 'tomandjerrytheclassiccollectionvolume05', name: 'توم وجيري - الجزء 5' },
+      { id: 'tomandjerrytheclassiccollectionvolume06', name: 'توم وجيري - الجزء 6' },
+      { id: 'tomandjerrytheclassiccollectionvolume07', name: 'توم وجيري - الجزء 7' },
+      { id: 'tomandjerrytheclassiccollectionvolume08', name: 'توم وجيري - الجزء 8' },
+      { id: 'tomandjerrytheclassiccollectionvolume09', name: 'توم وجيري - الجزء 9' },
+      { id: 'tomandjerrytheclassiccollectionvolume10', name: 'توم وجيري - الجزء 10' }
+    ]
+  },
+  {
+    catalogId: 'arch-pinkpanther',
+    catalogName: 'النمر الوردي',
+    items: [
+      { id: 'the-pink-panther', name: 'النمر الوردي - الحلقات القصيرة' },
+      { id: 'the-pink-panther-1993-series', name: 'النمر الوردي - مسلسل 1993' },
+      { id: 'the-pink-panther-show-the-complete-series-1969-70', name: 'عرض النمر الوردي 1969' }
+    ]
+  },
+  {
+    catalogId: 'arch-mrbean',
+    catalogName: 'مستر بين',
+    items: [
+      { id: 'mr-bean-animated-series', name: 'مستر بين - الكرتون' }
+    ]
+  },
+  {
+    catalogId: 'arch-conan',
+    catalogName: 'المحقق كونان (مدبلج)',
+    items: [
+      { id: 'anime-detective-conan-season10-arabic-dub', name: 'المحقق كونان - الجزء 10' }
+    ]
   }
-};
+];
 
-// كاش لتخزين الحلقات
+const NAME_BY_ID = {};
+LIBRARY.forEach((cat) => {
+  cat.items.forEach((it) => {
+    NAME_BY_ID[it.id] = it.name;
+  });
+});
+
 const episodeCache = {};
 
-// ------------------------------------------------------------------
-// يجلب ملفات الفيديو من مجموعة معينة
-// ------------------------------------------------------------------
 async function fetchEpisodes(identifier) {
-  if (episodeCache[identifier]) {
-    return episodeCache[identifier];
-  }
+  if (episodeCache[identifier]) return episodeCache[identifier];
 
   try {
-    const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 20000 });
-    const data = res.data;
+    const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 25000 });
+    const files = (res.data && res.data.files) || [];
 
-    if (!data || !data.files) return [];
-
-    const videoFiles = data.files.filter((f) => {
-      const name = (f.name || '').toLowerCase();
-      const isVideo = name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi');
-      // نتجاهل الملفات الوصفية والمصغرات
-      const isJunk = name.includes('_thumb') || name.endsWith('.ia.mp4');
+    const videos = files.filter((f) => {
+      const n = (f.name || '').toLowerCase();
+      const isVideo = n.endsWith('.mp4') || n.endsWith('.mkv') || n.endsWith('.avi');
+      const isJunk =
+        n.endsWith('.ia.mp4') ||
+        n.includes('_thumb') ||
+        n.includes('commentary') ||
+        n.includes('trailer');
       return isVideo && !isJunk;
     });
 
-    videoFiles.sort((a, b) => a.name.localeCompare(b.name, 'ar', { numeric: true }));
+    videos.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
 
-    const episodes = videoFiles.map((f) => ({
+    const episodes = videos.map((f) => ({
       identifier,
       fileName: f.name,
-      title: f.name.replace(/\.(mp4|mkv|avi)$/i, '')
+      title: f.name.replace(/\.(mp4|mkv|avi)$/i, '').replace(/_/g, ' ').trim()
     }));
 
     episodeCache[identifier] = episodes;
@@ -71,57 +100,19 @@ async function fetchEpisodes(identifier) {
   }
 }
 
-// ------------------------------------------------------------------
-// يبحث بـ archive.org عن مجموعات فيديو
-// ------------------------------------------------------------------
-async function searchArchive(query) {
-  try {
-    const params = {
-      q: `(${query}) AND mediatype:(movies)`,
-      'fl[]': ['identifier', 'title', 'year'],
-      rows: 40,
-      page: 1,
-      output: 'json'
-    };
-
-    const res = await axios.get(ARCHIVE_SEARCH, { params, timeout: 20000 });
-    const docs = (res.data && res.data.response && res.data.response.docs) || [];
-
-    return docs.map((d) => ({
-      identifier: d.identifier,
-      title: d.title || d.identifier,
-      year: d.year
-    }));
-  } catch (err) {
-    console.error(`خطأ بالبحث: ${err.message}`);
-    return [];
-  }
-}
-
-// ------------------------------------------------------------------
-// Manifest
-// ------------------------------------------------------------------
 const manifest = {
   id: 'com.khalifa.archivetoons',
-  version: '2.0.0',
+  version: '3.0.0',
   name: 'Archive Toons - أرشيف خليفة',
-  description: 'ابحث وشغّل الكرتون والأنمي المدبلج مباشرة من archive.org',
+  description: 'كرتون كلاسيك وأنمي مدبلج من archive.org',
   logo: 'https://archive.org/images/glogo.png',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
-  catalogs: [
-    {
-      type: 'series',
-      id: 'archive-favorites',
-      name: 'أرشيف خليفة - المفضلة'
-    },
-    {
-      type: 'series',
-      id: 'archive-search',
-      name: 'بحث بالأرشيف',
-      extra: [{ name: 'search', isRequired: true }]
-    }
-  ],
+  catalogs: LIBRARY.map((c) => ({
+    type: 'series',
+    id: c.catalogId,
+    name: c.catalogName
+  })),
   idPrefixes: ['arch:']
 };
 
@@ -130,77 +121,41 @@ app.get('/manifest.json', (req, res) => {
   res.json(manifest);
 });
 
-// ------------------------------------------------------------------
-// Catalog: المفضلة (مجموعات ثابتة)
-// ------------------------------------------------------------------
-app.get('/catalog/series/archive-favorites.json', (req, res) => {
-  const metas = Object.keys(FAVORITES).map((key) => {
-    const f = FAVORITES[key];
-    return {
-      id: `arch:${f.identifier}`,
-      type: 'series',
-      name: f.name,
-      poster: `${ARCHIVE_IMG}/${f.identifier}`,
-      posterShape: 'poster'
-    };
-  });
-  res.setHeader('Content-Type', 'application/json');
-  res.json({ metas });
-});
+app.get('/catalog/series/:catalogId.json', (req, res) => {
+  const cat = LIBRARY.find((c) => c.catalogId === req.params.catalogId);
+  if (!cat) return res.json({ metas: [] });
 
-// ------------------------------------------------------------------
-// Catalog: البحث الحي
-// ------------------------------------------------------------------
-app.get('/catalog/series/archive-search/search=:query.json', async (req, res) => {
-  const query = decodeURIComponent(req.params.query || '');
-
-  if (!query) {
-    return res.json({ metas: [] });
-  }
-
-  const results = await searchArchive(query);
-
-  const metas = results.map((r) => ({
-    id: `arch:${r.identifier}`,
+  const metas = cat.items.map((it) => ({
+    id: `arch:${it.id}`,
     type: 'series',
-    name: r.title,
-    poster: `${ARCHIVE_IMG}/${r.identifier}`,
-    posterShape: 'poster',
-    description: r.year ? `السنة: ${r.year}` : undefined
+    name: it.name,
+    poster: `${ARCHIVE_IMG}/${it.id}`,
+    posterShape: 'poster'
   }));
 
   res.setHeader('Content-Type', 'application/json');
   res.json({ metas });
 });
 
-// ------------------------------------------------------------------
-// Meta: تفاصيل المجموعة + حلقاتها
-// ------------------------------------------------------------------
 app.get('/meta/series/:id.json', async (req, res) => {
-  const id = req.params.id;
-  const identifier = id.replace('arch:', '');
-
+  const identifier = req.params.id.replace('arch:', '');
   const episodes = await fetchEpisodes(identifier);
 
   if (episodes.length === 0) {
     return res.status(404).json({ err: 'not found' });
   }
 
-  // نحاول نجيب اسم المجموعة الحقيقي
-  let seriesName = identifier;
-  const fav = Object.values(FAVORITES).find((f) => f.identifier === identifier);
-  if (fav) {
-    seriesName = fav.name;
-  }
+  const poster = `${ARCHIVE_IMG}/${identifier}`;
+  const seriesName = NAME_BY_ID[identifier] || identifier;
 
-  const posterUrl = `${ARCHIVE_IMG}/${identifier}`;
-
-  const videos = episodes.map((ep, index) => ({
-    id: `arch:${identifier}:${index}`,
+  const videos = episodes.map((ep, i) => ({
+    id: `arch:${identifier}:${i}`,
     title: ep.title,
+    name: ep.title,
     season: 1,
-    episode: index + 1,
-    thumbnail: posterUrl
+    episode: i + 1,
+    thumbnail: poster,
+    overview: ep.title
   }));
 
   res.setHeader('Content-Type', 'application/json');
@@ -209,54 +164,35 @@ app.get('/meta/series/:id.json', async (req, res) => {
       id: `arch:${identifier}`,
       type: 'series',
       name: seriesName,
-      poster: posterUrl,
-      background: posterUrl,
+      poster,
+      background: poster,
+      description: `${episodes.length} حلقة`,
       videos
     }
   });
 });
 
-// ------------------------------------------------------------------
-// Stream: رابط التشغيل المباشر
-// ------------------------------------------------------------------
 app.get('/stream/series/:id.json', async (req, res) => {
-  const id = req.params.id; // arch:IDENTIFIER:INDEX
-  const withoutPrefix = id.replace('arch:', '');
-  const lastColon = withoutPrefix.lastIndexOf(':');
+  const raw = req.params.id.replace('arch:', '');
+  const cut = raw.lastIndexOf(':');
+  if (cut === -1) return res.json({ streams: [] });
 
-  if (lastColon === -1) {
-    return res.json({ streams: [] });
-  }
-
-  const identifier = withoutPrefix.substring(0, lastColon);
-  const epIndex = parseInt(withoutPrefix.substring(lastColon + 1), 10);
-
-  if (isNaN(epIndex)) {
-    return res.json({ streams: [] });
-  }
+  const identifier = raw.substring(0, cut);
+  const index = parseInt(raw.substring(cut + 1), 10);
+  if (isNaN(index)) return res.json({ streams: [] });
 
   const episodes = await fetchEpisodes(identifier);
-  const ep = episodes[epIndex];
+  const ep = episodes[index];
+  if (!ep) return res.json({ streams: [] });
 
-  if (!ep) {
-    return res.json({ streams: [] });
-  }
-
-  const directUrl = `${ARCHIVE_DL}/${ep.identifier}/${encodeURIComponent(ep.fileName)}`;
+  const url = `${ARCHIVE_DL}/${ep.identifier}/${encodeURIComponent(ep.fileName)}`;
 
   res.setHeader('Content-Type', 'application/json');
   res.json({
-    streams: [
-      {
-        name: 'Archive',
-        title: ep.title,
-        url: directUrl
-      }
-    ]
+    streams: [{ name: 'Archive', title: ep.title, url }]
   });
 });
 
-// ------------------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`Archive Toons addon running on port ${PORT}`);
+  console.log(`Archive Toons v3 running on port ${PORT}`);
 });
