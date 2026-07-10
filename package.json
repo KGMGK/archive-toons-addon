@@ -1,7 +1,7 @@
 {
-  "name": "archivetoons-addon",
-  "version": "2.0.0",
-  "description": "Stremio addon for classic Arabic dubbed cartoons + كونان عربي",
+  "name": "conan-arabic-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon for Detective Conan Arabic Dubbed",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
