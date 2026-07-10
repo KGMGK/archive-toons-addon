@@ -1,16 +1,12 @@
 {
-  "name": "archive-toons-addon",
-  "version": "2.0.0",
-  "description": "Stremio addon: search and stream from archive.org",
-  "main": "index.js",
+  "name": "archivetoons-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon for classic Arabic dubbed cartoons",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "axios": "^1.7.2"
-  },
-  "engines": {
-    "node": ">=18"
+    "stremio-addon-sdk": "^1.1.0"
   }
 }
