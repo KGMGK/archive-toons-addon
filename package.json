@@ -1,12 +1,12 @@
 {
   "name": "archivetoons-addon",
-  "version": "1.0.0",
-  "description": "Stremio addon for classic Arabic dubbed cartoons",
-  "main": "server.js",
+  "version": "2.0.0",
+  "description": "Stremio addon for classic Arabic dubbed cartoons + كونان عربي",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "stremio-addon-sdk": "^1.1.0"
+    "express": "^4.18.2"
   }
 }
