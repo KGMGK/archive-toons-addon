@@ -1,8 +1,24 @@
 const express = require('express');
-const axios = require('axios');
-
 const app = express();
 const PORT = process.env.PORT || 7000;
+
+const BASE_URL = 'https://www.ccdko80.com/get_video.php?videos=';
+const CONAN_POSTER = 'https://image.tmdb.org/t/p/w500/oNfQZvar68KMhBuCxMJFLxHNfmu.jpg';
+const CONAN_BG = 'https://image.tmdb.org/t/p/w1280/hpGM1o8bFsOEkEVCGCBQDHRHnJH.jpg';
+
+const CONAN_SEASONS = [
+  { num: 1,  name: 'المحقق كونان الجزء الأول مدبلج',        epCount: 40  },
+  { num: 2,  name: 'المحقق كونان الجزء الثاني مدبلج',       epCount: 39  },
+  { num: 3,  name: 'المحقق كونان الجزء الثالث مدبلج',       epCount: 46  },
+  { num: 4,  name: 'المحقق كونان الجزء الرابع مدبلج',       epCount: 71  },
+  { num: 5,  name: 'المحقق كونان الجزء الخامس مدبلج',       epCount: 52  },
+  { num: 6,  name: 'المحقق كونان الجزء السادس مدبلج',       epCount: 52  },
+  { num: 7,  name: 'المحقق كونان الجزء السابع مدبلج',       epCount: 52  },
+  { num: 8,  name: 'المحقق كونان الجزء الثامن مدبلج',       epCount: 52  },
+  { num: 9,  name: 'المحقق كونان الجزء التاسع مدبلج',       epCount: 54  },
+  { num: 10, name: 'المحقق كونان الجزء العاشر مدبلج',       epCount: 50  },
+  { num: 11, name: 'المحقق كونان الجزء الحادي عشر مدبلج',  epCount: 66  },
+];
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -12,429 +28,108 @@ app.use((req, res, next) => {
   next();
 });
 
-const ARCHIVE_META = 'https://archive.org/metadata';
-const ARCHIVE_DL = 'https://archive.org/download';
-const ARCHIVE_IMG = 'https://archive.org/services/img';
-
-// TMDB
-const TMDB_KEY = process.env.TMDB_KEY || '';
-const TMDB_API = 'https://api.themoviedb.org/3';
-const TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
-const TMDB_BG = 'https://image.tmdb.org/t/p/w1280';
-
-// ------------------------------------------------------------------
-// المكتبة
-// tmdb: اسم البحث بـ TMDB (بالإنجليزي عشان النتائج أدق)
-// tmdbType: 'tv' أو 'movie'
-// ------------------------------------------------------------------
-const LIBRARY = [
-  {
-    catalogId: 'arch-conan',
-    catalogName: 'المحقق كونان (مدبلج)',
-    items: [],
-    tmdb: 'Detective Conan',
-    tmdbType: 'tv'
-  },
-  {
-    catalogId: 'arch-tomjerry',
-    catalogName: 'توم وجيري - كلاسيك',
-    tmdb: 'Tom and Jerry',
-    tmdbType: 'tv',
-    items: [
-      { id: 'tomandjerry-theclassiccollection-volume01', name: 'توم وجيري - الجزء 1' },
-      { id: 'tomandjerrytheclassiccollectionvolume03', name: 'توم وجيري - الجزء 3' },
-      { id: 'tomandjerrytheclassiccollectionvolume04', name: 'توم وجيري - الجزء 4' },
-      { id: 'tomandjerrytheclassiccollectionvolume05', name: 'توم وجيري - الجزء 5' },
-      { id: 'tomandjerrytheclassiccollectionvolume06', name: 'توم وجيري - الجزء 6' },
-      { id: 'tomandjerrytheclassiccollectionvolume07', name: 'توم وجيري - الجزء 7' },
-      { id: 'tomandjerrytheclassiccollectionvolume08', name: 'توم وجيري - الجزء 8' },
-      { id: 'tomandjerrytheclassiccollectionvolume09', name: 'توم وجيري - الجزء 9' },
-      { id: 'tomandjerrytheclassiccollectionvolume10', name: 'توم وجيري - الجزء 10' }
-    ]
-  },
-  {
-    catalogId: 'arch-pinkpanther',
-    catalogName: 'النمر الوردي',
-    tmdb: 'The Pink Panther Show',
-    tmdbType: 'tv',
-    items: [
-      { id: 'the-pink-panther', name: 'النمر الوردي - الحلقات القصيرة' },
-      { id: 'the-pink-panther-1993-series', name: 'النمر الوردي - مسلسل 1993' },
-      { id: 'the-pink-panther-show-the-complete-series-1969-70', name: 'عرض النمر الوردي 1969' }
-    ]
-  },
-  {
-    catalogId: 'arch-mrbean',
-    catalogName: 'مستر بين',
-    items: [
-      { id: 'series-of-mr-bean', name: 'مستر بين - المسلسل الأصلي', tmdb: 'Mr. Bean', tmdbType: 'tv' },
-      { id: 'mr-bean-animated-series', name: 'مستر بين - الكرتون', tmdb: 'Mr. Bean: The Animated Series', tmdbType: 'tv' }
-    ]
-  }
-];
-
-const NAME_BY_ID = {};
-const ART_BY_ID = {}; // { poster, background }
-
-function reindex() {
-  LIBRARY.forEach((cat) => {
-    cat.items.forEach((it) => {
-      NAME_BY_ID[it.id] = it.name;
-    });
-  });
-}
-reindex();
-
-// ------------------------------------------------------------------
-// جلب صور من TMDB
-// ------------------------------------------------------------------
-async function tmdbArt(query, type) {
-  if (!TMDB_KEY || !query) return null;
-
-  try {
-    const res = await axios.get(`${TMDB_API}/search/${type || 'tv'}`, {
-      params: { api_key: TMDB_KEY, query, language: 'ar' },
-      timeout: 15000
-    });
-
-    const first = (res.data && res.data.results && res.data.results[0]) || null;
-    if (!first) return null;
-
-    return {
-      poster: first.poster_path ? `${TMDB_IMG}${first.poster_path}` : null,
-      background: first.backdrop_path ? `${TMDB_BG}${first.backdrop_path}` : null
-    };
-  } catch (err) {
-    console.error(`TMDB (${query}): ${err.message}`);
-    return null;
-  }
-}
-
-// نعبي الصور لكل عنصر: صورة العنصر نفسه، وإلا صورة الصف، وإلا صورة الأرشيف
-async function loadArtwork() {
-  if (!TMDB_KEY) {
-    console.log('⚠️ ما فيه TMDB_KEY — بنستخدم صور الأرشيف');
-    return;
-  }
-
-  for (const cat of LIBRARY) {
-    // صورة الصف (تنطبق على كل عناصره ما لم يكن للعنصر صورته)
-    let catArt = null;
-    if (cat.tmdb) {
-      catArt = await tmdbArt(cat.tmdb, cat.tmdbType);
-      await new Promise((r) => setTimeout(r, 300));
-    }
-
-    for (const it of cat.items) {
-      let art = null;
-      if (it.tmdb) {
-        art = await tmdbArt(it.tmdb, it.tmdbType);
-        await new Promise((r) => setTimeout(r, 300));
-      }
-      const chosen = art || catArt;
-      if (chosen && chosen.poster) {
-        ART_BY_ID[it.id] = chosen;
-        console.log(`🖼️ بوستر: ${it.name}`);
-      }
-    }
-  }
-  console.log('اكتمل تحميل البوسترات ✅');
-}
-
-function posterFor(id) {
-  const a = ART_BY_ID[id];
-  return (a && a.poster) || `${ARCHIVE_IMG}/${id}`;
-}
-
-function backgroundFor(id) {
-  const a = ART_BY_ID[id];
-  return (a && (a.background || a.poster)) || `${ARCHIVE_IMG}/${id}`;
-}
-
-// ------------------------------------------------------------------
-const episodeCache = {};
-
-function humanSize(bytes) {
-  const n = parseInt(bytes, 10);
-  if (!n || isNaN(n)) return '';
-  if (n > 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  return Math.round(n / (1024 * 1024)) + ' MB';
-}
-
-function isVideoFile(f) {
-  const name = (f.name || '').toLowerCase();
-  const fmt = (f.format || '').toLowerCase();
-  const byExt =
-    name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.avi') ||
-    name.endsWith('.m4v') || name.endsWith('.webm') || name.endsWith('.mov');
-  const byFormat =
-    fmt.includes('mpeg4') || fmt.includes('h.264') || fmt.includes('matroska') ||
-    fmt.includes('webm') || fmt.includes('quicktime');
-  return byExt || byFormat;
-}
-
-function cleanTitle(name) {
-  return name
-    .replace(/\.ia\.mp4$/i, '')
-    .replace(/\.(mp4|mkv|avi|m4v|webm|mov)$/i, '')
-    .replace(/_/g, ' ')
-    .trim();
-}
-
-async function fetchMeta(identifier, tries = 2) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const res = await axios.get(`${ARCHIVE_META}/${identifier}`, { timeout: 40000 });
-      return res.data || {};
-    } catch (err) {
-      if (i === tries - 1) throw err;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-  }
-  return {};
-}
-
-async function fetchEpisodes(identifier) {
-  if (episodeCache[identifier]) return episodeCache[identifier];
-
-  try {
-    const data = await fetchMeta(identifier);
-    const files = data.files || [];
-    const directBase = data.server && data.dir ? `https://${data.server}${data.dir}` : null;
-
-    const vids = files.filter((f) => {
-      if (!isVideoFile(f)) return false;
-      const n = (f.name || '').toLowerCase();
-      if (n.includes('_thumb') || n.includes('commentary')) return false;
-      return true;
-    });
-
-    if (vids.length === 0) {
-      console.log(`${identifier}: 0 حلقة`);
-      episodeCache[identifier] = [];
-      return [];
-    }
-
-    const originals = vids.filter((f) => f.source !== 'derivative');
-    const derivatives = vids.filter((f) => f.source === 'derivative');
-    const base = originals.length > 0 ? originals : derivatives;
-    const canPairLight = originals.length > 0 && derivatives.length > 0;
-
-    base.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
-
-    const episodes = base.map((f) => {
-      let light = null;
-      if (canPairLight) {
-        const linked = derivatives.filter((d) => d.original === f.name);
-        if (linked.length > 0) {
-          linked.sort((a, b) => parseInt(a.size || 0, 10) - parseInt(b.size || 0, 10));
-          const s = linked[0];
-          if (parseInt(s.size || 0, 10) < parseInt(f.size || 0, 10) * 0.8) {
-            light = { fileName: s.name, size: s.size };
-          }
-        }
-      }
-      return {
-        identifier,
-        directBase,
-        title: cleanTitle(f.name),
-        main: { fileName: f.name, size: f.size },
-        light
-      };
-    });
-
-    episodeCache[identifier] = episodes;
-    console.log(`${identifier}: ${episodes.length} حلقة`);
-    return episodes;
-  } catch (err) {
-    console.error(`خطأ بجلب ${identifier}: ${err.message}`);
-    return [];
-  }
-}
-
-async function discoverConan() {
-  const cat = LIBRARY.find((c) => c.catalogId === 'arch-conan');
-  const found = [];
-
-  for (let s = 1; s <= 30; s++) {
-    const id = `anime-detective-conan-season${s}-arabic-dub`;
-    try {
-      const data = await fetchMeta(id, 1);
-      if ((data.files || []).some(isVideoFile)) {
-        found.push({ id, name: `المحقق كونان - الجزء ${s}` });
-        console.log(`✅ لقينا كونان الجزء ${s}`);
-      }
-    } catch (e) {
-      // مو موجود
-    }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-
-  cat.items = found;
-  reindex();
-  console.log(`اكتمل اكتشاف كونان: ${found.length} جزء`);
-}
-
-async function warmCache() {
-  await discoverConan();
-  await loadArtwork();
-
-  const all = [];
-  LIBRARY.forEach((c) => c.items.forEach((i) => all.push(i.id)));
-  for (const id of all) {
-    await fetchEpisodes(id);
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  console.log('اكتمل تسخين الكاش ✅');
-}
-
 const manifest = {
-  id: 'com.khalifa.archivetoons',
-  version: '7.0.0',
-  name: 'Archive Toons - أرشيف خليفة',
-  description: 'كرتون كلاسيك وأنمي مدبلج من archive.org',
-  logo: 'https://archive.org/images/glogo.png',
+  id: 'org.khalifa.archivetoons',
+  version: '2.0.0',
+  name: 'أرشيف خليفة',
+  description: 'كرتون مدبلج كلاسيكي + كونان عربي',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
-  catalogs: LIBRARY.map((c) => ({
-    type: 'series',
-    id: c.catalogId,
-    name: c.catalogName
-  })),
-  idPrefixes: ['arch:']
+  catalogs: [
+    { type: 'series', id: 'khalifa-toons', name: 'أرشيف خليفة' }
+  ],
+  idPrefixes: ['kt:']
 };
 
 app.get('/manifest.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
   res.json(manifest);
+});
+
+app.get('/catalog/series/:type/:id.json', (req, res) => {
+  const metas = CONAN_SEASONS.map((s) => ({
+    id: `kt:conan-ar`,
+    type: 'series',
+    name: s.name,
+    poster: CONAN_POSTER,
+    posterShape: 'poster',
+    description: `${s.epCount} حلقة`
+  }));
+  res.json({ metas });
+});
+
+app.get('/meta/series/:id.json', (req, res) => {
+  const id = req.params.id;
+  const parts = id.split(':');
+
+  let seasonNum = 1;
+  if (parts.length >= 3) {
+    seasonNum = parseInt(parts[2], 10);
+  } else {
+    seasonNum = parseInt(parts[1], 10);
+  }
+
+  const season = CONAN_SEASONS.find(s => s.num === seasonNum);
+  if (!season) return res.json({ meta: null });
+
+  const videos = [];
+  for (let i = 1; i <= season.epCount; i++) {
+    videos.push({
+      id: `${id}:<LaTex>${i}`,
+      title: `الحلقة $</LaTex>{i}`,
+      season: 1,
+      episode: i,
+      overview: `<LaTex>${season.name} - الحلقة $</LaTex>{i}`,
+      thumbnail: CONAN_BG
+    });
+  }
+
+  res.json({
+    meta: {
+      id: id,
+      type: 'series',
+      name: season.name,
+      poster: CONAN_POSTER,
+      background: CONAN_BG,
+      videos: videos
+    }
+  });
+});
+
+app.get('/stream/series/:id.json', (req, res) => {
+  const id = req.params.id;
+  const parts = id.split(':');
+
+  let seasonNum, episodeNum;
+
+  if (parts.length === 5) {
+    seasonNum = parseInt(parts[2], 10);
+    episodeNum = parseInt(parts[3], 10);
+  } else if (parts.length === 3) {
+    seasonNum = parseInt(parts[1], 10);
+    episodeNum = parseInt(parts[2], 10);
+  } else {
+    return res.json({ streams: [] });
+  }
+
+  const season = CONAN_SEASONS.find(s => s.num === seasonNum);
+  if (!season || episodeNum < 1 || episodeNum > season.epCount) {
+    return res.json({ streams: [] });
+  }
+
+  const videoUrl = `<LaTex>${BASE_URL}c$</LaTex>{seasonNum}/EP<LaTex>${episodeNum}.mp4`;
+
+  res.json({
+    streams: [
+      {
+        title: `🎬 كونان عربي\nالجزء $</LaTex>{seasonNum} - الحلقة <LaTex>${episodeNum}`,
+        url: videoUrl
+      }
+    ]
+  });
 });
 
 app.get('/ping', (req, res) => res.send('ok'));
 
-// ------------------------------------------------------------------
-// بلاي لست M3U — تشتغل بأي مشغل يدعم M3U (VLC / IPTV Player / Infuse)
-// ------------------------------------------------------------------
-app.get('/playlist.m3u', async (req, res) => {
-  const lines = ['#EXTM3U'];
-
-  for (const cat of LIBRARY) {
-    for (const it of cat.items) {
-      const episodes = await fetchEpisodes(it.id);
-      const poster = posterFor(it.id);
-
-      episodes.forEach((ep) => {
-        const encoded = encodeURIComponent(ep.main.fileName);
-        const url = ep.directBase
-          ? `${ep.directBase}/${encoded}`
-          : `${ARCHIVE_DL}/${it.id}/${encoded}`;
-
-        lines.push(
-          `#EXTINF:-1 tvg-logo="${poster}" group-title="${cat.catalogName}",${it.name} - ${ep.title}`
-        );
-        lines.push(url);
-      });
-    }
-  }
-
-  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
-  res.setHeader('Content-Disposition', 'inline; filename="archive-toons.m3u"');
-  res.send(lines.join('\n'));
-});
-
-app.get('/catalog/series/:catalogId.json', (req, res) => {
-  const cat = LIBRARY.find((c) => c.catalogId === req.params.catalogId);
-  if (!cat) return res.json({ metas: [] });
-
-  const metas = cat.items.map((it) => ({
-    id: `arch:${it.id}`,
-    type: 'series',
-    name: it.name,
-    poster: posterFor(it.id),
-    posterShape: 'poster'
-  }));
-
-  res.setHeader('Content-Type', 'application/json');
-  res.json({ metas });
-});
-
-app.get('/meta/series/:id.json', async (req, res) => {
-  const identifier = req.params.id.replace('arch:', '');
-  const episodes = await fetchEpisodes(identifier);
-
-  if (episodes.length === 0) {
-    return res.status(404).json({ err: 'not found' });
-  }
-
-  const poster = posterFor(identifier);
-  const background = backgroundFor(identifier);
-  const seriesName = NAME_BY_ID[identifier] || identifier;
-
-  const videos = episodes.map((ep, i) => ({
-    id: `arch:${identifier}:${i}`,
-    title: ep.title,
-    name: ep.title,
-    season: 1,
-    episode: i + 1,
-    thumbnail: background,
-    overview: ep.title
-  }));
-
-  res.setHeader('Content-Type', 'application/json');
-  res.json({
-    meta: {
-      id: `arch:${identifier}`,
-      type: 'series',
-      name: seriesName,
-      poster,
-      background,
-      description: `${episodes.length} حلقة`,
-      videos
-    }
-  });
-});
-
-app.get('/stream/series/:id.json', async (req, res) => {
-  const raw = req.params.id.replace('arch:', '');
-  const cut = raw.lastIndexOf(':');
-  if (cut === -1) return res.json({ streams: [] });
-
-  const identifier = raw.substring(0, cut);
-  const index = parseInt(raw.substring(cut + 1), 10);
-  if (isNaN(index)) return res.json({ streams: [] });
-
-  const episodes = await fetchEpisodes(identifier);
-  const ep = episodes[index];
-  if (!ep) return res.json({ streams: [] });
-
-  const buildUrl = (fileName) => {
-    const encoded = encodeURIComponent(fileName);
-    return ep.directBase
-      ? `${ep.directBase}/${encoded}`
-      : `${ARCHIVE_DL}/${identifier}/${encoded}`;
-  };
-
-  const streams = [];
-
-  if (ep.light) {
-    streams.push({
-      name: '⚡ خفيف',
-      title: `${ep.title}\nأسرع • ${humanSize(ep.light.size)}`,
-      url: buildUrl(ep.light.fileName)
-    });
-  }
-
-  streams.push({
-    name: ep.light ? '🎬 أصلي' : '▶️ تشغيل',
-    title: `${ep.title}\n${humanSize(ep.main.size)}`,
-    url: buildUrl(ep.main.fileName)
-  });
-
-  res.setHeader('Content-Type', 'application/json');
-  res.json({ streams });
-});
-
 app.listen(PORT, () => {
-  console.log(`Archive Toons v7 running on port ${PORT}`);
-  console.log(TMDB_KEY ? '🔑 TMDB مفعّل' : '⚠️ TMDB غير مفعّل');
-  warmCache();
+  console.log(`Archive Toons running on port $</LaTex>{PORT}`);
 });
