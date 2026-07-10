@@ -29,16 +29,16 @@ app.use((req, res, next) => {
 });
 
 const manifest = {
-  id: 'org.khalifa.archivetoons',
-  version: '2.0.0',
-  name: 'أرشيف خليفة',
-  description: 'كرتون مدبلج كلاسيكي + كونان عربي',
+  id: 'org.khalifa.conanarabic',
+  version: '1.0.0',
+  name: 'كونان بالعربي',
+  description: 'المحقق كونان مدبلج — الأجزاء 1 إلى 11 من كونان عربي',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
   catalogs: [
-    { type: 'series', id: 'khalifa-toons', name: 'أرشيف خليفة' }
+    { type: 'series', id: 'conan-catalog', name: 'المحقق كونان مدبلج' }
   ],
-  idPrefixes: ['kt:']
+  idPrefixes: ['cn:']
 };
 
 app.get('/manifest.json', (req, res) => {
@@ -47,12 +47,12 @@ app.get('/manifest.json', (req, res) => {
 
 app.get('/catalog/series/:type/:id.json', (req, res) => {
   const metas = CONAN_SEASONS.map((s) => ({
-    id: `kt:conan-ar`,
+    id: `cn:season:<LaTex>${s.num}`,
     type: 'series',
     name: s.name,
     poster: CONAN_POSTER,
     posterShape: 'poster',
-    description: `${s.epCount} حلقة`
+    description: `$</LaTex>{s.epCount} حلقة`
   }));
   res.json({ metas });
 });
@@ -64,8 +64,6 @@ app.get('/meta/series/:id.json', (req, res) => {
   let seasonNum = 1;
   if (parts.length >= 3) {
     seasonNum = parseInt(parts[2], 10);
-  } else {
-    seasonNum = parseInt(parts[1], 10);
   }
 
   const season = CONAN_SEASONS.find(s => s.num === seasonNum);
@@ -74,11 +72,11 @@ app.get('/meta/series/:id.json', (req, res) => {
   const videos = [];
   for (let i = 1; i <= season.epCount; i++) {
     videos.push({
-      id: `${id}:<LaTex>${i}`,
-      title: `الحلقة $</LaTex>{i}`,
+      id: `<LaTex>${id}:$</LaTex>{i}`,
+      title: `الحلقة <LaTex>${i}`,
       season: 1,
       episode: i,
-      overview: `<LaTex>${season.name} - الحلقة $</LaTex>{i}`,
+      overview: `$</LaTex>{season.name} - الحلقة ${i}`,
       thumbnail: CONAN_BG
     });
   }
@@ -116,12 +114,12 @@ app.get('/stream/series/:id.json', (req, res) => {
     return res.json({ streams: [] });
   }
 
-  const videoUrl = `<LaTex>${BASE_URL}c$</LaTex>{seasonNum}/EP<LaTex>${episodeNum}.mp4`;
+  const videoUrl = `${BASE_URL}c<LaTex>${seasonNum}/EP$</LaTex>{episodeNum}.mp4`;
 
   res.json({
     streams: [
       {
-        title: `🎬 كونان عربي\nالجزء $</LaTex>{seasonNum} - الحلقة <LaTex>${episodeNum}`,
+        title: `🎬 كونان بالعربي\nالجزء <LaTex>${seasonNum} - الحلقة $</LaTex>{episodeNum}`,
         url: videoUrl
       }
     ]
@@ -131,5 +129,5 @@ app.get('/stream/series/:id.json', (req, res) => {
 app.get('/ping', (req, res) => res.send('ok'));
 
 app.listen(PORT, () => {
-  console.log(`Archive Toons running on port $</LaTex>{PORT}`);
+  console.log(`Conan Arabic Addon running on port ${PORT}`);
 });
