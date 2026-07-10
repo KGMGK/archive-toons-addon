@@ -5,7 +5,7 @@ const PORT = process.env.PORT || 7000;
 const BASE_URL = 'https://www.ccdko80.com/get_video.php?videos=';
 const CONAN_POSTER = 'https://image.tmdb.org/t/p/w500/oNfQZvar68KMhBuCxMJFLxHNfmu.jpg';
 const CONAN_BG = 'https://image.tmdb.org/t/p/w1280/hpGM1o8bFsOEkEVCGCBQDHRHnJH.jpg';
-g
+
 const CONAN_SEASONS = [
   { num: 1,  name: 'المحقق كونان الجزء الأول مدبلج',        epCount: 40  },
   { num: 2,  name: 'المحقق كونان الجزء الثاني مدبلج',       epCount: 39  },
